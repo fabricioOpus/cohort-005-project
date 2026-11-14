@@ -35,6 +35,12 @@ A Student who has lost their Enrollment on a course but still has progress on it
 Seconds of video a Student has actually played in a course: the furthest point reached in each lesson, added up. Not lessons opened.
 _Avoid_: Viewed, Progress
 
+### Discussion
+
+**Comment**:
+A message someone writes on a Lesson, either standing on its own or as a reply to another Comment.
+_Avoid_: Post
+
 ### Purchases
 
 **Purchase**:
