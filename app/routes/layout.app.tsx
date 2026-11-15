@@ -3,6 +3,13 @@ import type { Route } from "./+types/layout.app";
 import { Sidebar } from "~/components/sidebar";
 import { DevUI } from "~/components/dev-ui";
 import { Toaster } from "sonner";
+import { getPrototypeNotifications } from "~/components/notifications-prototype/data.server";
+import {
+  PrototypeSwitcher,
+  useProtoNotifications,
+  useSidebarSlots,
+  useVariant,
+} from "~/components/notifications-prototype/variants";
 import { getCurrentUserId, getDevCountry } from "~/lib/session";
 import { getCountryTierInfo, COUNTRIES } from "~/lib/ppp";
 import { eq, and, or, sql, desc } from "drizzle-orm";
@@ -213,6 +220,8 @@ export async function loader({ request }: Route.LoaderArgs) {
     countryTierInfo,
     countries: COUNTRIES,
     isTeamAdmin: currentUserId ? isTeamAdmin(currentUserId) : false,
+    // PROTOTYPE (#18)
+    protoNotifications: getPrototypeNotifications(currentUserId ?? null),
   };
 }
 
@@ -227,12 +236,41 @@ export default function AppLayout({ loaderData }: Route.ComponentProps) {
     isTeamAdmin: userIsTeamAdmin,
   } = loaderData;
 
+  // PROTOTYPE (#18): key by user so switching users in DevUI resets read state.
+  return (
+    <AppLayoutInner
+      key={currentUser?.id ?? "anon"}
+      loaderData={loaderData}
+    />
+  );
+}
+
+function AppLayoutInner({
+  loaderData,
+}: {
+  loaderData: Route.ComponentProps["loaderData"];
+}) {
+  const {
+    users,
+    currentUser,
+    recentCourses,
+    devCountry,
+    countryTierInfo,
+    countries,
+    isTeamAdmin: userIsTeamAdmin,
+    protoNotifications,
+  } = loaderData;
+  const variant = useVariant();
+  const protoState = useProtoNotifications(protoNotifications);
+  const slots = useSidebarSlots(variant, protoState);
+
   return (
     <div className="flex h-screen overflow-hidden">
       <Sidebar
         currentUser={currentUser}
         recentCourses={recentCourses}
         isTeamAdmin={userIsTeamAdmin}
+        {...slots}
       />
       <main className="flex-1 overflow-y-auto">
         <Outlet />
@@ -245,6 +283,10 @@ export default function AppLayout({ loaderData }: Route.ComponentProps) {
         countries={countries}
       />
       <Toaster position="bottom-right" richColors closeButton />
+      <PrototypeSwitcher
+        current={variant}
+        unread={protoState.items.filter((n) => !n.read).length}
+      />
     </div>
   );
 }

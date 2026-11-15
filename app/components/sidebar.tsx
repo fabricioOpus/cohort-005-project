@@ -1,5 +1,5 @@
 import { NavLink, Form } from "react-router";
-import { useState, useEffect } from "react";
+import { useState, useEffect, type ReactNode } from "react";
 import { cn } from "~/lib/utils";
 import { UserRole } from "~/db/schema";
 import { UserAvatar } from "~/components/user-avatar";
@@ -41,6 +41,21 @@ interface SidebarProps {
   currentUser: CurrentUser | null;
   recentCourses?: RecentCourse[];
   isTeamAdmin?: boolean;
+  // PROTOTYPE (#18) — notification variant slots; remove with the prototype.
+  headerSlot?: ReactNode;
+  navSlot?: ReactNode;
+  belowNavSlot?: ReactNode;
+  navBadges?: Record<string, number>;
+  courseBadges?: Record<string, number>;
+}
+
+function ProtoBadge({ count }: { count?: number }) {
+  if (!count) return null;
+  return (
+    <span className="ml-auto min-w-5 rounded-full bg-primary px-1.5 text-center text-[11px] font-semibold leading-5 text-primary-foreground">
+      {count > 9 ? "9+" : count}
+    </span>
+  );
 }
 
 interface NavItem {
@@ -117,6 +132,11 @@ export function Sidebar({
   currentUser,
   recentCourses = [],
   isTeamAdmin = false,
+  headerSlot,
+  navSlot,
+  belowNavSlot,
+  navBadges = {},
+  courseBadges = {},
 }: SidebarProps) {
   const currentUserRole = currentUser?.role ?? null;
   const [isDark, setIsDark] = useState(false);
@@ -140,6 +160,7 @@ export function Sidebar({
         <NavLink to="/" className="text-lg font-bold tracking-tight">
           Cadence
         </NavLink>
+        {headerSlot && <div className="ml-auto">{headerSlot}</div>}
       </div>
 
       <nav className="flex-1 space-y-1 p-3">
@@ -160,8 +181,10 @@ export function Sidebar({
             >
               {item.icon}
               {item.label}
+              <ProtoBadge count={navBadges[item.to]} />
             </NavLink>
           ))}
+        {navSlot}
         {isTeamAdmin && (
           <NavLink
             to="/team"
@@ -179,6 +202,8 @@ export function Sidebar({
           </NavLink>
         )}
       </nav>
+
+      {belowNavSlot}
 
       {recentCourses.length > 0 && (
         <div className="border-t border-sidebar-border p-3">
@@ -199,8 +224,11 @@ export function Sidebar({
                   )
                 }
               >
-                <div className="truncate text-sm font-medium">
-                  {course.title}
+                <div className="flex items-center gap-2">
+                  <div className="truncate text-sm font-medium">
+                    {course.title}
+                  </div>
+                  <ProtoBadge count={courseBadges[course.slug]} />
                 </div>
                 <div className="mt-1 flex items-center gap-2">
                   <div className="h-1.5 flex-1 rounded-full bg-sidebar-accent">
