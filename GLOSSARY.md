@@ -41,6 +41,12 @@ _Avoid_: Viewed, Progress
 A message someone writes on a Lesson, either standing on its own or as a reply to another Comment.
 _Avoid_: Post
 
+### Notifications
+
+**Notification**:
+A heads-up a person gets about something that happened on Cadence. A person gets at most one Notification per event, however many channels it reaches them through.
+_Avoid_: Alert, Message
+
 ### Purchases
 
 **Purchase**:
