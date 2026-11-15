@@ -9,6 +9,7 @@ import {
   useProtoNotifications,
   useSidebarSlots,
   useVariant,
+  VARIANT_COOKIE,
 } from "~/components/notifications-prototype/variants";
 import { getCurrentUserId, getDevCountry } from "~/lib/session";
 import { getCountryTierInfo, COUNTRIES } from "~/lib/ppp";
@@ -222,6 +223,10 @@ export async function loader({ request }: Route.LoaderArgs) {
     isTeamAdmin: currentUserId ? isTeamAdmin(currentUserId) : false,
     // PROTOTYPE (#18)
     protoNotifications: getPrototypeNotifications(currentUserId ?? null),
+    protoVariant:
+      request.headers
+        .get("Cookie")
+        ?.match(new RegExp(`${VARIANT_COOKIE}=([A-Z])`))?.[1] ?? null,
   };
 }
 
@@ -259,8 +264,9 @@ function AppLayoutInner({
     countries,
     isTeamAdmin: userIsTeamAdmin,
     protoNotifications,
+    protoVariant,
   } = loaderData;
-  const variant = useVariant();
+  const variant = useVariant(protoVariant);
   const protoState = useProtoNotifications(protoNotifications);
   const slots = useSidebarSlots(variant, protoState);
 

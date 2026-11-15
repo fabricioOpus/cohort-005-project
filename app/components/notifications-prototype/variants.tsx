@@ -1,6 +1,6 @@
 // PROTOTYPE — throwaway. Ticket "Como as notificações aparecem dentro do app" (#18).
 // Three structurally different ways Notifications surface inside Cadence,
-// switchable via ?variant=A|B|C (remembered in localStorage across navigation)
+// switchable via ?variant=A|B|C|D (remembered in a cookie across navigation)
 // and the floating bar at the bottom-centre. Read state lives in memory only.
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router";
@@ -25,10 +25,15 @@ export const VARIANTS = {
   A: "Sino + Popover",
   B: "Inbox em painel",
   C: "Distribuída, sem central",
+  D: "Sino + Popover com filtro",
 } as const;
 export type VariantKey = keyof typeof VARIANTS;
 const KEYS = Object.keys(VARIANTS) as VariantKey[];
-const STORAGE_KEY = "cadence-notifications-prototype-variant";
+export const VARIANT_COOKIE = "proto_variant";
+
+function persistVariant(v: VariantKey) {
+  document.cookie = `${VARIANT_COOKIE}=${v}; path=/; SameSite=Lax`;
+}
 
 // ---------------------------------------------------------------- state
 
@@ -44,20 +49,16 @@ export function useProtoNotifications(initial: ProtoNotification[]) {
 }
 export type ProtoState = ReturnType<typeof useProtoNotifications>;
 
-export function useVariant(): VariantKey {
+// URL wins; otherwise the cookie (read by the layout loader, so SSR matches
+// and the variant survives navigation that drops ?variant=).
+export function useVariant(fromCookie: string | null): VariantKey {
   const [params] = useSearchParams();
   const fromUrl = params.get("variant")?.toUpperCase();
-  const [stored, setStored] = useState<VariantKey>("A");
-  useEffect(() => {
-    try {
-      const v = localStorage.getItem(STORAGE_KEY) as VariantKey | null;
-      if (v && KEYS.includes(v)) setStored(v);
-    } catch {}
-  }, []);
-  if (fromUrl && KEYS.includes(fromUrl as VariantKey)) {
-    return fromUrl as VariantKey;
-  }
-  return stored;
+  const isKey = (v: string | null | undefined): v is VariantKey =>
+    !!v && KEYS.includes(v as VariantKey);
+  const variant = isKey(fromUrl) ? fromUrl : isKey(fromCookie) ? fromCookie : "A";
+  useEffect(() => persistVariant(variant), [variant]);
+  return variant;
 }
 
 // ---------------------------------------------------------------- shared bits
@@ -87,6 +88,23 @@ function headline(n: ProtoNotification) {
     case "new_lesson":
       return `Nova Lesson em ${n.courseTitle}: ${n.lessonTitle}`;
   }
+}
+
+// "Ana, Bruno e Carla responderam em Lesson X": names every actor so the
+// count of the group is visible, instead of a vague "e mais N".
+function groupHeadline(items: ProtoNotification[]) {
+  const [first] = items;
+  const names = [...new Set(items.map((n) => n.actorName ?? "?"))];
+  const who =
+    names.length === 1
+      ? names[0]
+      : `${names.slice(0, -1).join(", ")} e ${names[names.length - 1]}`;
+  const plural = names.length > 1;
+  const verb =
+    first.type === "reply"
+      ? plural ? "responderam seu Comment" : "respondeu seu Comment"
+      : plural ? "comentaram" : "comentou";
+  return `${who} ${verb} em ${first.lessonTitle}`;
 }
 
 function CountBadge({ count, className }: { count: number; className?: string }) {
@@ -150,9 +168,11 @@ function GroupRow({
       </span>
       <span className="min-w-0 flex-1">
         <span className="block">
-          {headline(first)}
+          {others > 0 ? groupHeadline(group.items) : headline(first)}
           {others > 0 && (
-            <span className="text-muted-foreground"> e mais {others}</span>
+            <span className="ml-1.5 rounded bg-muted px-1.5 py-0.5 text-[11px] font-semibold text-muted-foreground">
+              {group.items.length} notificações
+            </span>
           )}
         </span>
         {first.excerpt && !dense && (
@@ -239,6 +259,125 @@ function VariantABell({ state }: { state: ProtoState }) {
   );
 }
 
+// ---------------------------------------------------------------- filter (B, D)
+
+type Tab = "unread" | "all";
+type TypeFilter = ProtoNotificationType | "all";
+
+function useFilter(state: ProtoState) {
+  const [tab, setTab] = useState<Tab>("unread");
+  const [type, setType] = useState<TypeFilter>("all");
+  const unread = state.items.filter((n) => !n.read).length;
+  const visible = state.items.filter(
+    (n) => (tab === "all" || !n.read) && (type === "all" || n.type === type)
+  );
+  return { tab, setTab, type, setType, unread, visible };
+}
+
+function FilterBar({
+  f,
+  onMarkAll,
+}: {
+  f: ReturnType<typeof useFilter>;
+  onMarkAll: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-2 border-b px-4 py-2 text-sm">
+      {(["unread", "all"] as const).map((t) => (
+        <button
+          key={t}
+          type="button"
+          onClick={() => f.setTab(t)}
+          className={cn(
+            "rounded-md px-2 py-1",
+            f.tab === t ? "bg-accent font-medium" : "text-muted-foreground"
+          )}
+        >
+          {t === "unread" ? `Não lidas (${f.unread})` : "Todas"}
+        </button>
+      ))}
+      <select
+        value={f.type}
+        onChange={(e) => f.setType(e.target.value as TypeFilter)}
+        className="ml-auto rounded-md border bg-background px-2 py-1 text-xs"
+      >
+        <option value="all">Todos os tipos</option>
+        {Object.entries(TYPE_META).map(([k, m]) => (
+          <option key={k} value={k}>
+            {m.label}
+          </option>
+        ))}
+      </select>
+      <button
+        type="button"
+        onClick={onMarkAll}
+        disabled={f.unread === 0}
+        className="text-xs text-primary hover:underline disabled:opacity-40"
+      >
+        Marcar todas como lidas
+      </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- Variant D
+// A's bell + B's filter, inside the Popover. Grouped by Comment within the
+// filtered set. Questions has no badge: Comment novo lives in the bell only.
+
+function VariantDBell({ state }: { state: ProtoState }) {
+  const [open, setOpen] = useState(false);
+  const f = useFilter(state);
+  const openN = useOpenNotification(state);
+  const groups = groupByThread(f.visible);
+  return (
+    <Popover.Root open={open} onOpenChange={setOpen}>
+      <Popover.Trigger asChild>
+        <button
+          type="button"
+          aria-label={`Notificações, ${f.unread} não lidas`}
+          className="relative rounded-md p-1.5 text-sidebar-foreground/70 hover:bg-sidebar-accent"
+        >
+          <Bell className="size-5" />
+          {f.unread > 0 && (
+            <span className="absolute -right-0.5 -top-0.5 min-w-4 rounded-full bg-primary px-1 text-center text-[10px] font-bold leading-4 text-primary-foreground">
+              {f.unread > 9 ? "9+" : f.unread}
+            </span>
+          )}
+        </button>
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content
+          side="right"
+          align="start"
+          sideOffset={12}
+          className="z-50 w-[28rem] rounded-lg border bg-popover text-popover-foreground shadow-lg"
+        >
+          <div className="px-4 pt-3 font-semibold">Notificações</div>
+          <FilterBar f={f} onMarkAll={state.markAllRead} />
+          <div className="max-h-[28rem] overflow-y-auto p-1">
+            {groups.length === 0 ? (
+              <p className="p-6 text-center text-sm text-muted-foreground">
+                Tudo em dia.
+              </p>
+            ) : (
+              groups.map((g) => (
+                <GroupRow
+                  key={g.key}
+                  group={g}
+                  onOpen={(ids, n) => {
+                    setOpen(false);
+                    openN(ids, n);
+                  }}
+                />
+              ))
+            )}
+          </div>
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
+  );
+}
+
 // ---------------------------------------------------------------- Variant B
 // No bell. A nav item "Notificações" with a count opens a full-height panel
 // over the page: tabs Não lidas / Todas, filter by type, flat list (one row per
@@ -246,13 +385,9 @@ function VariantABell({ state }: { state: ProtoState }) {
 
 function VariantBPanel({ state }: { state: ProtoState }) {
   const [open, setOpen] = useState(false);
-  const [tab, setTab] = useState<"unread" | "all">("unread");
-  const [type, setType] = useState<ProtoNotificationType | "all">("all");
+  const f = useFilter(state);
+  const { unread, visible } = f;
   const openN = useOpenNotification(state);
-  const unread = state.items.filter((n) => !n.read).length;
-  const visible = state.items.filter(
-    (n) => (tab === "all" || !n.read) && (type === "all" || n.type === type)
-  );
   return (
     <Dialog.Root open={open} onOpenChange={setOpen}>
       <Dialog.Trigger asChild>
@@ -276,40 +411,7 @@ function VariantBPanel({ state }: { state: ProtoState }) {
               <X className="size-4" />
             </Dialog.Close>
           </div>
-          <div className="flex items-center gap-2 border-b px-5 py-2 text-sm">
-            {(["unread", "all"] as const).map((t) => (
-              <button
-                key={t}
-                type="button"
-                onClick={() => setTab(t)}
-                className={cn(
-                  "rounded-md px-2 py-1",
-                  tab === t ? "bg-accent font-medium" : "text-muted-foreground"
-                )}
-              >
-                {t === "unread" ? `Não lidas (${unread})` : "Todas"}
-              </button>
-            ))}
-            <select
-              value={type}
-              onChange={(e) => setType(e.target.value as typeof type)}
-              className="ml-auto rounded-md border bg-background px-2 py-1 text-xs"
-            >
-              <option value="all">Todos os tipos</option>
-              {Object.entries(TYPE_META).map(([k, m]) => (
-                <option key={k} value={k}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              onClick={state.markAllRead}
-              className="text-xs text-primary hover:underline"
-            >
-              Marcar todas
-            </button>
-          </div>
+          <FilterBar f={f} onMarkAll={state.markAllRead} />
           <ul className="flex-1 divide-y overflow-y-auto">
             {visible.length === 0 && (
               <li className="p-10 text-center text-sm text-muted-foreground">
@@ -408,6 +510,8 @@ export function useSidebarSlots(
           courseBadges,
         };
       }
+      case "D":
+        return { headerSlot: <VariantDBell state={state} /> };
     }
   }, [variant, state]);
 }
@@ -424,9 +528,7 @@ export function PrototypeSwitcher({
   const [params, setParams] = useSearchParams();
   const go = (delta: number) => {
     const next = KEYS[(KEYS.indexOf(current) + delta + KEYS.length) % KEYS.length];
-    try {
-      localStorage.setItem(STORAGE_KEY, next);
-    } catch {}
+    persistVariant(next);
     const p = new URLSearchParams(params);
     p.set("variant", next);
     setParams(p, { replace: true, preventScrollReset: true });
